@@ -220,10 +220,10 @@ calc_child_pugh = function(bilirubin, inr, alb, ascites, enceph) {
 }
 
 # Neil Mehta's score
-calc_mehta = function(meld3, child_pugh, afp, tumor_num, tumor_size1) {
-  (meld3 - 10) + ((child_pugh - 5) * 3) + 5 * (afp > 21 & afp <= 40) + 
+calc_mehta = function(meld_na, child_pugh, afp, tumor_num, tumor_size1) {
+  (meld_na - 10) + ((child_pugh - 5) * 3) + 5 * (afp > 21 & afp <= 40) + 
     9 * (afp > 40 & afp <= 500) + 20 * (afp > 500 & afp <= 1000) + 
-    23 * (afp > 1000) + 6 * (tumor_num == 1 & tumor_size1 >= 3.1 & tumor_size1 <= 6) + 
+    23 * (afp > 1000) + 6 * (tumor_num == 1 & tumor_size1 >= 3.1 & tumor_size1 <= 5) + 
     5 * (tumor_num >= 2 & tumor_num <= 3)
 }
 
@@ -328,7 +328,7 @@ df = cohort %>%
     # Child-Pugh score
     Child_Pugh = calc_child_pugh(BILIRUBIN, INR, ALBUMIN, ASCITES, ENCEPH), 
     # Mehta score
-    Mehta = calc_mehta(MELD3, Child_Pugh, AFP, TUMORNUM, TUMOR_SIZE1), 
+    Mehta = calc_mehta(MELDNA, Child_Pugh, AFP, TUMORNUM, TUMOR_SIZE1), 
     # HALT-HCC
     HALT_HCC = calc_halt_hcc(MELDNA, AFP, TBS), 
     # deMELD
@@ -620,7 +620,7 @@ B = 1000
 # Not sure how to prevent it (the options at the top of notebook don't fix it), 
 # but running in parallel appears to cause memory overflow issues, leading to 
 # R and/or the entire computer crashing
-# So currently running in serial. Takes about 9.5 hours
+# So currently running in serial. Takes about 8.25 hours
 # For some reason, you need to run this line-by-line using Command + Enter
 # Running chunk by clicking the little green arrow or copy-pasting to the 
 # terminal seems to cause it to hang

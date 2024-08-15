@@ -534,10 +534,10 @@ calc_child_pugh = function(bilirubin, inr, alb, ascites, enceph) {
 }
 
 # Neil Mehta&#39;s score
-calc_mehta = function(meld3, child_pugh, afp, tumor_num, tumor_size1) {
-  (meld3 - 10) + ((child_pugh - 5) * 3) + 5 * (afp &gt; 21 &amp; afp &lt;= 40) + 
+calc_mehta = function(meld_na, child_pugh, afp, tumor_num, tumor_size1) {
+  (meld_na - 10) + ((child_pugh - 5) * 3) + 5 * (afp &gt; 21 &amp; afp &lt;= 40) + 
     9 * (afp &gt; 40 &amp; afp &lt;= 500) + 20 * (afp &gt; 500 &amp; afp &lt;= 1000) + 
-    23 * (afp &gt; 1000) + 6 * (tumor_num == 1 &amp; tumor_size1 &gt;= 3.1 &amp; tumor_size1 &lt;= 6) + 
+    23 * (afp &gt; 1000) + 6 * (tumor_num == 1 &amp; tumor_size1 &gt;= 3.1 &amp; tumor_size1 &lt;= 5) + 
     5 * (tumor_num &gt;= 2 &amp; tumor_num &lt;= 3)
 }
 
@@ -642,7 +642,7 @@ df = cohort %&gt;%
     # Child-Pugh score
     Child_Pugh = calc_child_pugh(BILIRUBIN, INR, ALBUMIN, ASCITES, ENCEPH), 
     # Mehta score
-    Mehta = calc_mehta(MELD3, Child_Pugh, AFP, TUMORNUM, TUMOR_SIZE1), 
+    Mehta = calc_mehta(MELDNA, Child_Pugh, AFP, TUMORNUM, TUMOR_SIZE1), 
     # HALT-HCC
     HALT_HCC = calc_halt_hcc(MELDNA, AFP, TBS), 
     # deMELD
@@ -966,6 +966,7 @@ B = 1000
 # For some reason, you need to run this line-by-line using Command + Enter
 # Running chunk by clicking the little green arrow or copy-pasting to the 
 # terminal seems to cause it to hang
+# 9:50pm
 boot_diagnostics = foreach::foreach(
   b = 1:B, .packages = c(&quot;tidyverse&quot;, &quot;survival&quot;, &quot;randomForestSRC&quot;, &quot;gbm&quot;, 
                          &quot;survivalmodels&quot;, &quot;pec&quot;)
@@ -1154,10 +1155,10 @@ concordance_tab</code></pre>
 ## MELD components              0.713 (0.663, 0.761) 0.655 (0.626, 0.687)
 ## MELD 3.0 + log(AFP) + tumors 0.762 (0.717, 0.801)  0.71 (0.684, 0.737)
 ## Random survival forest       0.758 (0.713, 0.801)  0.702 (0.676, 0.73)
-## Gradient boosting model      0.757 (0.709, 0.798) 0.711 (0.681, 0.738)
+## Gradient boosting model      0.757 (0.711, 0.801)  0.711 (0.683, 0.74)
 ## DeepHit                      0.609 (0.552, 0.666) 0.542 (0.508, 0.577)
 ## DeepSurv                      0.707 (0.662, 0.75) 0.677 (0.648, 0.707)
-## Mehta                        0.734 (0.686, 0.776)   0.68 (0.65, 0.711)
+## Mehta                         0.735 (0.689, 0.78)  0.68 (0.651, 0.711)
 ## HALT_HCC                     0.711 (0.669, 0.754)  0.677 (0.65, 0.705)
 ## deMELD                       0.671 (0.618, 0.718) 0.606 (0.576, 0.636)
 ## HCC_MELD                     0.663 (0.608, 0.713) 0.601 (0.568, 0.632)
@@ -1168,10 +1169,10 @@ concordance_tab</code></pre>
 ## MELD components              0.633 (0.611, 0.655)
 ## MELD 3.0 + log(AFP) + tumors 0.684 (0.662, 0.704)
 ## Random survival forest       0.676 (0.655, 0.696)
-## Gradient boosting model      0.686 (0.663, 0.706)
+## Gradient boosting model      0.686 (0.665, 0.707)
 ## DeepHit                      0.537 (0.511, 0.562)
 ## DeepSurv                     0.664 (0.643, 0.685)
-## Mehta                        0.661 (0.641, 0.683)
+## Mehta                        0.662 (0.641, 0.684)
 ## HALT_HCC                      0.66 (0.641, 0.681)
 ## deMELD                       0.586 (0.564, 0.607)
 ## HCC_MELD                     0.576 (0.553, 0.599)
@@ -1214,10 +1215,10 @@ data.frame(concordance_tab[c(&quot;MELD 3.0 + log(AFP) + tumors&quot;,
 ## MELD 3.0                     0.643 (0.613, 0.673)                0
 ## MELD components              0.655 (0.626, 0.687)                0
 ## Random survival forest        0.702 (0.676, 0.73)           0.6411
-## Gradient boosting model      0.711 (0.681, 0.738)           0.8426
+## Gradient boosting model       0.711 (0.683, 0.74)           0.8426
 ## DeepHit                      0.542 (0.508, 0.577)                0
 ## DeepSurv                     0.677 (0.648, 0.707)           0.0094
-## Mehta                          0.68 (0.65, 0.711)            8e-04
+## Mehta                         0.68 (0.651, 0.711)            0.001
 ## HALT_HCC                      0.677 (0.65, 0.705)            0.012
 ## deMELD                       0.606 (0.576, 0.636)                0
 ## HCC_MELD                     0.601 (0.568, 0.632)                0
