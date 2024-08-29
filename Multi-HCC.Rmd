@@ -1,16 +1,19 @@
 ---
 title: "Multi-HCC"
-output: html_document
+output:
+  html_document: default
 date: "2024-08-20"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
 library(tidyverse)
 library(haven)
 library(survminer)
 library(gridExtra)
 library(compareC)
+library(tableone)
 
 library(survival)
 library(randomForestSRC)
@@ -345,7 +348,11 @@ df = cohort %>%
     # 6 months
     censored_6months = fu_days > 180, 
     removed_status_6months = ifelse(censored_6months == TRUE, 0, removed_status), 
-    fu_days_6months = ifelse(censored_6months == TRUE, 180, fu_days)) %>% 
+    fu_days_6months = ifelse(censored_6months == TRUE, 180, fu_days), 
+    # 1 year
+    censored_1year = fu_days > 365, 
+    removed_status_1year = ifelse(censored_1year == TRUE, 0, removed_status), 
+    fu_days_1year = ifelse(censored_1year == TRUE, 365, fu_days)) %>% 
   drop_na(MELD3, AFP, tumortype)
 ```
 
@@ -354,12 +361,14 @@ df = cohort %>%
 We fit a GAM model to the 6-month outcome with spline terms for log(AFP + 1). 
 
 ```{r}
-gam_fit = gam(fu_days_6months ~ MELD3 + s(log(AFP + 1)) + 
-                T1 + single_tumor_2_3 + single_tumor_3_5, 
+gam_fit = gam(fu_days_6months ~ MELD3 + s(log(AFP + 1)) + tumortype, 
               data = df, family = "cox.ph", weights = removed_status_6months)
 
-plot(gam_fit)
-abline(v = c(1.5, 5.5))
+plot(gam_fit, ylab = "Hazard Ratio", xlab = "AFP (ng/mL)", 
+     xaxt = 'n', xlim = c(0.67, 10))
+brks = c(5, 20, 100, 250, 500, 1000, 2500, 5000, 10000)
+axis(side = 1, at = log(brks + 1), labels = brks) 
+abline(v = c(0, 5.5))
 ```
 
 Based on the spline exercise, we will bound AFP in our models by 1 and 250 Note that log(250 + 1) is 5.5, so it corresponds approximately to the cutoff of 6 in the above plot. 
@@ -712,13 +721,14 @@ grid.arrange(p2, p1, nrow = 2, ncol = 1, widths = 7, heights = c(3, 7))
 Histogram of Multi-HCC score among HCC patients, shaded by risk quartile. 
 
 ```{r, fig.width = 5}
+quartile_label = c("1 (Low)", "2", "3", "4 (High)")
 test_df %>% 
   filter(HCC == TRUE) %>% 
   mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC))) %>% 
   drop_na(quant) %>% 
   ggplot(aes(x = multi_HCC, fill = factor(quant, levels = levels(quant)))) + 
   geom_histogram(color = "black", binwidth = 1) + 
-  scale_fill_discrete(name = NULL, labels = paste("Quartile", 1:4)) + 
+  scale_fill_discrete(name = NULL, labels = paste("Quartile", quartile_label)) + 
   xlab("Multi-HCC") + ylab("Count") + 
   theme(legend.position = "bottom")
 ```
@@ -801,6 +811,142 @@ names(my_coefs_6months) = c("MELD3", "log(AFP)", "[T2 3-5]", "[multifocal]", "[T
 paste(c(round(my_intercept_6months, 3), sapply(names(my_coefs_6months), function(x) {
   paste0(round(my_coefs_6months[x], 3), "*", x)
 })), collapse = " + ")
+```
+
+## Descriptive and miscellaneous stats
+
+"Table 1" of cohort characteristics. 
+
+```{r}
+table1 = CreateTableOne(
+  c("Age, years", "Sex", "MELD", "MELD-Na", "MELD 3.0", 
+    "Serum bilirubin", "Serum INR", "Serum creatinine", "Serum albumin", 
+    "Serum sodium", "AFP, ng/mL", "Categorical AFP", "Tumor type", 
+    "History of LRT"), 
+  data = rbind(train_df %>% mutate(set = "Development"), 
+               test_df  %>% mutate(set = "Validation")) %>% 
+    mutate("Age, years" = INIT_AGE, 
+           Sex = fct_recode(GENDER, male = "M", female = "F"), 
+           "MELD-Na" = MELDNA, 
+           "MELD 3.0" = MELD3, 
+           "Serum bilirubin" = BILIRUBIN, 
+           "Serum INR" = INR, 
+           "Serum creatinine" = SERUM_CREAT, 
+           "Serum albumin" = ALBUMIN, 
+           "Serum sodium" = SERUM_SODIUM, 
+           "AFP, ng/mL" = AFP, 
+           "Categorical AFP" = factor(
+             case_when(AFP <= 20 ~ "≤20", 
+                       AFP <= 40 ~ "21-40", 
+                       AFP <= 250 ~ "41-250", 
+                       AFP > 250 ~ "250+", 
+                       TRUE ~ NA), 
+             levels = c("≤20", "21-40", "41-250", "250+")),   
+           "Tumor type" = fct_recode(tumortype, 
+                                     "T1/T2 2-3 cm" = "T1, T2 2-3", 
+                                     "T2 3-5 cm" = "T2 3-5", 
+                                     "T2 multifocal" = "multifocal", 
+                                     "T3 (downstaged)" = "T3"), 
+           "History of LRT" = ifelse(historyLRT == 1, "Yes", "No")), 
+  strata = "set", 
+  test = FALSE, 
+  smd = FALSE, 
+  addOverall = TRUE)
+
+print(table1, 
+      # Median [IQR] instead of mean (SD)
+      nonnormal = c("Age, years", "MELD", "MELD-Na", "MELD 3.0", 
+                    "Serum bilirubin", "Serum INR", "Serum creatinine", 
+                    "Serum albumin", "Serum sodium", "AFP, ng/mL"))
+```
+
+Overall outcomes among HCC patients. 
+
+```{r}
+    # 8 is death, 13 is dropout and 4/15/21 are transplanted
+# 11018 (60.4%) patients were removed for deceased donor liver transplant; 315 (1.7%) for living donor liver transplant, 957 (5.2%) for death, and 2619 (14.4%) for being too sick. 
+df %>% 
+  filter(HCC == TRUE) %>% 
+  mutate(removal_reason = factor(case_when(
+    REM_CD == 4 ~ "Deceased donor liver transplant", 
+    REM_CD == 15 ~ "Living donor liver transplant", 
+    REM_CD == 8 ~ "Death", 
+    REM_CD == 13 ~ "Too sick", 
+    TRUE ~ NA
+  ), levels = c("Deceased donor liver transplant", 
+                "Living donor liver transplant", 
+                "Death", "Too sick"))) %>% 
+  count(removal_reason) %>% 
+  mutate(val = paste0(n, " (", round(100*prop.table(n), 1), "%)")) %>% 
+  drop_na() %>% 
+  dplyr::select("Removal reason" = removal_reason, "n (%)" = val)
+```
+
+Overall waiting list dropout at 90 days, 6 months, and 1 year among validation set patients with HCC, estimated using Kaplan-Meier. 
+
+```{r}
+tibble(
+  Time = c("90 days", "6 months", "1 year"), 
+  "Overall waitlist dropout" = 
+    paste0(round(100 * (1 - summary(
+      survfit(Surv(fu_days_1year, removed_status_1year) ~ 1, data = HCC_test_df), 
+      times = c(90, 180, 365))$surv), 1), "%")
+)
+```
+
+Observed risk of waiting list dropout at 6 months for each Multi-HCC quartile in the validation set, estimated using Kaplan-Meier. 
+
+```{r}
+HCC_test_df = HCC_test_df %>% 
+  mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC)))
+
+tibble(
+  Quartile = c("1 (Low)", "2", "3", "4 (High)"), 
+  "Median Multi-HCC" = tapply(HCC_test_df$multi_HCC, HCC_test_df$quant, median), 
+  "Observed risk of waitlist dropout" = paste0(round(100 * (1 - summary(
+    survfit(Surv(fu_days_6months, removed_status_6months) ~ quant, 
+            data = HCC_test_df), 
+    times = 180)$surv), 1), "%")
+) %>% `rownames<-`(NULL)
+```
+
+Kaplan-Meier plot of 5-year post-transplant survival among patients in each Multi-HCC risk quartile. 
+
+```{r}
+quartile_label = c("1 (Low)", "2", "3", "4 (High)")
+HCC_test_5year_df <- HCC_test_df %>% filter(!is.na(PX_STAT_DATE)) %>%
+  mutate(Quartile = factor(quant, labels = ), 
+         time_tx_px = as.numeric(PX_STAT_DATE-TX_DATE), 
+         fail5year = ifelse(PX_STAT=="D" & time_tx_px < 1825, 1, 0))
+
+coxph_5year = survfit(Surv(time_tx_px, fail5year) ~ Quartile, data = HCC_test_5year_df)
+ggsurvplot(coxph_5year, data = HCC_test_5year_df, 
+           legend.title = "", legend.labs = paste("Quartile", quartile_label),
+           risk.table = FALSE, censor = FALSE, pval = TRUE, 
+           pval.coord = c(90, 0.6), conf.int = FALSE, 
+           xlim = c(0, 1800), ylim = c(0.5, 1.0), 
+           break.time.by = 365, risk.table.y.text.col = FALSE)
+```
+
+5-year post-transplant survival among validation patients with Multi-HCC 16-19, 20-23, and above 24, estimated using Kaplan-Meier. 
+
+```{r}
+tibble(
+  "Multi-HCC" = c("16-19", "20-23", "≥24"), 
+  "5-year post-transplant survival" = sapply(
+    list(survfit(Surv(time_tx_px, fail5year) ~ 1, 
+                 data = HCC_test_5year_df %>% 
+                   filter(multi_HCC >= 16, multi_HCC <= 19)), 
+         survfit(Surv(time_tx_px, fail5year) ~ 1, 
+                 data = HCC_test_5year_df %>% 
+                   filter(multi_HCC >= 20, multi_HCC <= 23)), 
+         survfit(Surv(time_tx_px, fail5year) ~ 1, 
+                 data = HCC_test_5year_df %>% 
+                   filter(multi_HCC >= 24))),
+    function(x) {
+      paste0(round(100 * summary(x, times = 5*365)$surv, 1), "%")
+    })
+)
 ```
 
 ## Concordance, integrated Brier scores, and calibration
@@ -1006,7 +1152,7 @@ calib_6months_df = data.frame(
 p_km_6months = ggsurvplot(survfit(Surv(fu_days_6months, removed_status_6months) ~ 
                                     quart_6months, data = HCC_test_df), 
                           legend.title = "", 
-                          legend.labs = paste("Quartile", 1:4),
+                          legend.labs = paste("Quartile", quartile_label),
                           censor = FALSE, conf.int = TRUE) 
 
 # KM plot with predicted survival probabilities for each quartile
@@ -1017,6 +1163,7 @@ p_km_6months$plot +
         color = Quartile)) + 
   scale_color_manual(values = rep(scales::hue_pal()(4), 2)) + 
   coord_cartesian(ylim = c(0.65, 1)) + 
-  guides(color = "none", fill = guide_legend(override.aes = list(alpha = 1))) + 
+  guides(color = "none", 
+         fill = guide_legend(override.aes = list(alpha = 1), ncol = 2)) + 
   theme(legend.position = "bottom")
 ```
