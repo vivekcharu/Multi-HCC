@@ -364,6 +364,16 @@ We fit a GAM model to the 6-month outcome with spline terms for log(AFP + 1).
 gam_fit = gam(fu_days_6months ~ MELD3 + s(log(AFP + 1)) + tumortype, 
               data = df, family = "cox.ph", weights = removed_status_6months)
 
+ragg::agg_tiff("img/log_afp_spline.tiff", 
+               width = 7, height = 5, units = "in", res = 300)
+par(bg = "white")
+plot(gam_fit, ylab = "Hazard Ratio", xlab = "AFP (ng/mL)", 
+     xaxt = 'n', xlim = c(0.67, 10))
+brks = c(5, 20, 100, 250, 500, 1000, 2500, 5000, 10000)
+axis(side = 1, at = log(brks + 1), labels = brks) 
+abline(v = c(0, 5.5))
+dev.off()
+
 plot(gam_fit, ylab = "Hazard Ratio", xlab = "AFP (ng/mL)", 
      xaxt = 'n', xlim = c(0.67, 10))
 brks = c(5, 20, 100, 250, 500, 1000, 2500, 5000, 10000)
@@ -591,6 +601,13 @@ pretty_plot.rfsrc = function(rfsrc_vi) {
   plot(rfsrc_vi)
 }
 
+ragg::agg_tiff("img/vimp_rf.tiff", 
+               width = 12, height = 5, units = "in", res = 300)
+par(bg = "white")
+pretty_plot.rfsrc(vimp_rf_6months)
+dev.off()
+
+par(bg = "white")
 pretty_plot.rfsrc(vimp_rf_6months)
 ```
 
@@ -655,6 +672,15 @@ Visual checks for the proportional hazards assumption.
 
 ```{r, fig.width = 5}
 # KM plot up to 90 days for HCC and non-HCC patients
+ragg::agg_tiff("img/ph_km.tiff", 
+               width = 5, height = 5, units = "in", res = 300)
+ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort, 
+                   data = train_df %>% 
+                     mutate(Cohort = ifelse(HCC == TRUE, "HCC", "Non-HCC"))), 
+           legend.title = "", legend.labs = c("HCC", "Non-HCC"), 
+           xlim = c(0, 90))
+dev.off()
+
 ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort, 
                    data = train_df %>% 
                      mutate(Cohort = ifelse(HCC == TRUE, "HCC", "Non-HCC"))), 
@@ -665,6 +691,13 @@ ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort,
 ```{r, fig.height = 10}
 # Schoenfeld residuals
 p1 = ggcoxzph(cox.zph(fit_coxph_HCC_nonHCC_6months), font.main = 0)
+
+ragg::agg_tiff("img/ph_schoenfeld.tiff", 
+               width = 7, height = 10, units = "in", res = 300)
+quartz()
+grid.arrange(p1[[1]], p1[[2]], p1[[3]], ncol = 1)
+dev.off()
+
 grid.arrange(p1[[1]], p1[[2]], p1[[3]], ncol = 1)
 ```
 
@@ -715,6 +748,12 @@ p2 = test_df %>%
   theme_void() +
   theme(legend.position = "none", 
         plot.margin = unit(c(3, 29, 0, 8.5), "mm"))
+
+ragg::agg_tiff("img/pts_to_add.tiff", 
+               width = 7, height = 8, units = "in", res = 300)
+grid.arrange(p2, p1, nrow = 2, ncol = 1, widths = 7, heights = c(3, 7))
+dev.off()
+
 grid.arrange(p2, p1, nrow = 2, ncol = 1, widths = 7, heights = c(3, 7))
 ```
 
@@ -722,6 +761,20 @@ Histogram of Multi-HCC score among HCC patients, shaded by risk quartile.
 
 ```{r, fig.width = 5}
 quartile_label = c("1 (Low)", "2", "3", "4 (High)")
+
+ragg::agg_tiff("img/hist_score.tiff", 
+               width = 5, height = 5, units = "in", res = 300)
+test_df %>% 
+  filter(HCC == TRUE) %>% 
+  mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC))) %>% 
+  drop_na(quant) %>% 
+  ggplot(aes(x = multi_HCC, fill = factor(quant, levels = levels(quant)))) + 
+  geom_histogram(color = "black", binwidth = 1) + 
+  scale_fill_discrete(name = NULL, labels = paste("Quartile", quartile_label)) + 
+  xlab("Multi-HCC") + ylab("Count") + 
+  theme(legend.position = "bottom")
+dev.off()
+
 test_df %>% 
   filter(HCC == TRUE) %>% 
   mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC))) %>% 
@@ -748,6 +801,38 @@ fit_coxph_HCC_nonHCC_6months2 = coxph(
   Surv(fu_days_90days, removed_status_90days) ~ 
         nonHCC_MELD + HCC + HCC_preds6months, 
   data = train_df, x = TRUE)
+
+
+ragg::agg_tiff("img/nonhcc_vs_hcc.tiff", 
+               width = 6.5, height = 5, units = "in", res = 300)
+data.frame(
+  test_df, 
+  surv = t(summary(survfit(fit_coxph_HCC_nonHCC_6months2, 
+                                 newdata = test_df), times = 90)$surv)) %>% 
+  mutate(
+    # Use Multi-HCC score for HCC, MELD 3.0 for non-HCC
+    composite_score = case_when(
+      HCC == TRUE ~ multi_HCC, 
+      HCC == FALSE ~ MELD3, 
+      TRUE ~ NA), 
+    # Round score
+    composite_score_rounded = round(composite_score)) %>% 
+  # Keep only scores between 6 and 40
+  filter(composite_score_rounded >= 6 & composite_score_rounded <= 40) %>% 
+  # Keep observations that are closest to the rounded score
+  group_by(composite_score_rounded, HCC) %>% 
+  arrange(abs(composite_score_rounded - composite_score)) %>% 
+  summarize(surv = first(surv)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = HCC, values_from = surv) %>% 
+  ggplot(aes(x = `0`, y = `1`, color = composite_score_rounded)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, color = "grey") + 
+  viridis::scale_color_viridis("MELD 3.0 or\nmulti-HCC", option = "D")+
+  scale_x_log10() + scale_y_log10() + 
+  xlim(0, 1) + ylim(0, 1) + 
+  xlab("MELD 3.0 (non-HCC patients)") + ylab("Multi-HCC (HCC patients)")
+dev.off()
 
 data.frame(
   test_df, 
@@ -886,13 +971,13 @@ df %>%
 Overall waiting list dropout at 90 days, 6 months, and 1 year among validation set patients with HCC, estimated using Kaplan-Meier. 
 
 ```{r}
-tibble(
+as.data.frame(tibble(
   Time = c("90 days", "6 months", "1 year"), 
   "Overall waitlist dropout" = 
     paste0(round(100 * (1 - summary(
       survfit(Surv(fu_days_1year, removed_status_1year) ~ 1, data = HCC_test_df), 
       times = c(90, 180, 365))$surv), 1), "%")
-)
+))
 ```
 
 Observed risk of waiting list dropout at 6 months for each Multi-HCC quartile in the validation set, estimated using Kaplan-Meier. 
@@ -901,14 +986,14 @@ Observed risk of waiting list dropout at 6 months for each Multi-HCC quartile in
 HCC_test_df = HCC_test_df %>% 
   mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC)))
 
-tibble(
+as.data.frame(tibble(
   Quartile = c("1 (Low)", "2", "3", "4 (High)"), 
   "Median Multi-HCC" = tapply(HCC_test_df$multi_HCC, HCC_test_df$quant, median), 
   "Observed risk of waitlist dropout" = paste0(round(100 * (1 - summary(
     survfit(Surv(fu_days_6months, removed_status_6months) ~ quant, 
             data = HCC_test_df), 
     times = 180)$surv), 1), "%")
-) %>% `rownames<-`(NULL)
+)) %>% `rownames<-`(NULL)
 ```
 
 Kaplan-Meier plot of 5-year post-transplant survival among patients in each Multi-HCC risk quartile. 
@@ -920,10 +1005,26 @@ HCC_test_5year_df <- HCC_test_df %>% filter(!is.na(PX_STAT_DATE)) %>%
          time_tx_px = as.numeric(PX_STAT_DATE-TX_DATE), 
          fail5year = ifelse(PX_STAT=="D" & time_tx_px < 1825, 1, 0))
 
-coxph_5year = survfit(Surv(time_tx_px, fail5year) ~ Quartile, data = HCC_test_5year_df)
-ggsurvplot(coxph_5year, data = HCC_test_5year_df, 
+surv_5year = survfit(Surv(time_tx_px, fail5year) ~ Quartile, 
+                     data = HCC_test_5year_df)
+survdiff_5year = survdiff(Surv(time_tx_px, fail5year) ~ Quartile, 
+                          data = HCC_test_5year_df)
+
+ragg::agg_tiff("img/km_5year.tiff", 
+               width = 7, height = 5, units = "in", res = 300)
+ggsurvplot(surv_5year, data = HCC_test_5year_df, 
            legend.title = "", legend.labs = paste("Quartile", quartile_label),
-           risk.table = FALSE, censor = FALSE, pval = TRUE, 
+           risk.table = FALSE, censor = FALSE, 
+           pval = round(survdiff_5year$pvalue, 2), 
+           pval.coord = c(90, 0.6), conf.int = FALSE, 
+           xlim = c(0, 1800), ylim = c(0.5, 1.0), 
+           break.time.by = 365, risk.table.y.text.col = FALSE)
+dev.off()
+
+ggsurvplot(surv_5year, data = HCC_test_5year_df, 
+           legend.title = "", legend.labs = paste("Quartile", quartile_label),
+           risk.table = FALSE, censor = FALSE, 
+           pval = round(survdiff_5year$pvalue, 2), 
            pval.coord = c(90, 0.6), conf.int = FALSE, 
            xlim = c(0, 1800), ylim = c(0.5, 1.0), 
            break.time.by = 365, risk.table.y.text.col = FALSE)
@@ -932,18 +1033,17 @@ ggsurvplot(coxph_5year, data = HCC_test_5year_df,
 5-year post-transplant survival, by quartile, estimated using Kaplan-Meier. 
 
 ```{r}
-tibble(
+as.data.frame(tibble(
   Quartile = c("1 (Low)", "2", "3", "4 (High)"), 
-  "Median Multi-HCC" = tapply(HCC_test_df$multi_HCC, HCC_test_df$quant, median), 
-  "Observed risk of waitlist dropout" = 
-    paste0(round(100 * summary(coxph_5year, times = 5*365)$surv, 1), "%")
-) %>% `rownames<-`(NULL)
+  "5-year post-transplant survival" = 
+    paste0(round(100 * summary(surv_5year, times = 5*365)$surv, 1), "%")
+)) %>% `rownames<-`(NULL)
 ```
 
 5-year post-transplant survival among validation patients with Multi-HCC 16-19, 20-23, and above 24, estimated using Kaplan-Meier. 
 
 ```{r}
-tibble(
+as.data.frame(tibble(
   "Multi-HCC" = c("16-19", "20-23", "≥24"), 
   "5-year post-transplant survival" = sapply(
     list(survfit(Surv(time_tx_px, fail5year) ~ 1, 
@@ -958,7 +1058,7 @@ tibble(
     function(x) {
       paste0(round(100 * summary(x, times = 5*365)$surv, 1), "%")
     })
-)
+))
 ```
 
 ## Concordance, integrated Brier scores, and calibration
@@ -1168,6 +1268,20 @@ p_km_6months = ggsurvplot(survfit(Surv(fu_days_6months, removed_status_6months) 
                           censor = FALSE, conf.int = TRUE) 
 
 # KM plot with predicted survival probabilities for each quartile
+ragg::agg_tiff("img/calib_km.tiff", 
+               width = 4.5, height = 5, units = "in", res = 300)
+p_km_6months$plot +
+  geom_point(
+    data = calib_6months_df, 
+    aes(x = time, y = surv, 
+        color = Quartile)) + 
+  scale_color_manual(values = rep(scales::hue_pal()(4), 2)) + 
+  coord_cartesian(ylim = c(0.65, 1)) + 
+  guides(color = "none", 
+         fill = guide_legend(override.aes = list(alpha = 1), ncol = 2)) + 
+  theme(legend.position = "bottom")
+dev.off()
+
 p_km_6months$plot +
   geom_point(
     data = calib_6months_df, 
