@@ -2,7 +2,7 @@
 title: "Multi-HCC"
 output:
   html_document: default
-date: "2024-08-20"
+date: "2024-10-04"
 ---
 
 ```{r setup, include=FALSE}
@@ -13,7 +13,9 @@ library(haven)
 library(survminer)
 library(gridExtra)
 library(compareC)
+library(survC1)
 library(tableone)
+library(kableExtra)
 
 library(survival)
 library(randomForestSRC)
@@ -372,7 +374,7 @@ plot(gam_fit, ylab = "Hazard Ratio", xlab = "AFP (ng/mL)",
 brks = c(5, 20, 100, 250, 500, 1000, 2500, 5000, 10000)
 axis(side = 1, at = log(brks + 1), labels = brks) 
 abline(v = c(0, 5.5))
-dev.off()
+invisible(dev.off())
 
 plot(gam_fit, ylab = "Hazard Ratio", xlab = "AFP (ng/mL)", 
      xaxt = 'n', xlim = c(0.67, 10))
@@ -412,7 +414,9 @@ rbind(Overall = c(Total = nrow(df),
               Test = sum(test_df$HCC == TRUE)), 
       "Non-HCC" = c(Total = sum(df$HCC == FALSE), 
                     Train = sum(train_df$HCC == FALSE), 
-                    Test = sum(test_df$HCC == FALSE)))
+                    Test = sum(test_df$HCC == FALSE))) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
 ## Fit models to HCC patients
@@ -543,7 +547,7 @@ preds_pycox_6months = sapply(fit_pycox_6months, function(fit) {
 })
 ```
 
-### Coefficients and variable importance
+### Coefficients
 
 Coefficient estimates for Multi-HCC Cox PH model. 
 
@@ -552,7 +556,12 @@ Coefficient estimates for Multi-HCC Cox PH model.
 my_model = "MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)"
 
 # Coefficient summary
-summary(fit_coxph_6months[[my_model]])
+cbind(summary(fit_coxph_6months[[my_model]])$coefficients, 
+      as.data.frame(exp(confint(fit_coxph_6months[[my_model]]))) %>%
+        rename_with(~paste("exp(coef)", .x))) %>% 
+  mutate_if(is.numeric, ~round(., 4)) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
 Univariate HRs for each of the covariates in Multi-HCC. 
@@ -572,43 +581,10 @@ do.call(
     cbind(summary(x)$coefficients, 
           as.data.frame(exp(confint(x))) %>% rename_with(~paste("exp(coef)", .x)))
   })
-)
-```
-
-Variable importance for the random forest model. 
-
-```{r, fig.width = 12}
-# Wrapper that replaces variable names in VI plot with prettier labels
-pretty_plot.rfsrc = function(rfsrc_vi) {
-  rf_var_dict = c("FEMALE" = "Female", 
-                  "MELD_BILIRUBIN" = "Bilirubin (MELD 3.0)", 
-                  "BILIRUBIN" = "Bilirubin", 
-                  "MELD_SERUM_SODIUM" = "Serum sodium (MELD 3.0)", 
-                  "SERUM_SODIUM" = "Serum sodium", 
-                  "MELD_INR" = "INR (MELD 3.0)", 
-                  "INR" = "INR", 
-                  "MELD_SERUM_CREAT" = "Serum creatinine (MELD 3.0)", 
-                  "SERUM_CREAT" = "Serum creatinine", 
-                  "MELD_ALBUMIN" = "Albumin (MELD 3.0)", 
-                  "ALBUMIN" = "Albumin", 
-                  "AFP" = "AFP", 
-                  "AFP_trunc" = "log(truncated AFP)", 
-                  "tumortypeT2.3.5" = "Tumor type: T2 3-5", 
-                  "tumortypemultifocal" = "Tumor type: multifocal",
-                  "tumortypeT3" = "Tumor type: T3")
-  names(rfsrc_vi$importance)[
-    match(names(rfsrc_vi$importance), names(rf_var_dict))] = rf_var_dict
-  plot(rfsrc_vi)
-}
-
-ragg::agg_tiff("img/vimp_rf.tiff", 
-               width = 12, height = 5, units = "in", res = 300)
-par(bg = "white")
-pretty_plot.rfsrc(vimp_rf_6months)
-dev.off()
-
-par(bg = "white")
-pretty_plot.rfsrc(vimp_rf_6months)
+) %>% 
+  mutate_if(is.numeric, ~round(., 4)) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
 ## Rescale to MELD
@@ -677,28 +653,29 @@ ragg::agg_tiff("img/ph_km.tiff",
 ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort, 
                    data = train_df %>% 
                      mutate(Cohort = ifelse(HCC == TRUE, "HCC", "Non-HCC"))), 
+           xlab = "Days", ylab = "Proportion not removed from waitlist", 
            legend.title = "", legend.labs = c("HCC", "Non-HCC"), 
            xlim = c(0, 90))
-dev.off()
+invisible(dev.off())
 
 ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort, 
                    data = train_df %>% 
                      mutate(Cohort = ifelse(HCC == TRUE, "HCC", "Non-HCC"))), 
+           xlab = "Days", ylab = "Proportion not removed from waitlist", 
            legend.title = "", legend.labs = c("HCC", "Non-HCC"), 
            xlim = c(0, 90))
 ```
 
 ```{r, fig.height = 10}
 # Schoenfeld residuals
-p1 = ggcoxzph(cox.zph(fit_coxph_HCC_nonHCC_6months), font.main = 0)
+p1 = ggcoxzph(cox.zph(fit_coxph_HCC_nonHCC_6months), font.main = 0, 
+              xlab = "Days")
 
 ragg::agg_tiff("img/ph_schoenfeld.tiff", 
                width = 7, height = 10, units = "in", res = 300)
 quartz()
 grid.arrange(p1[[1]], p1[[2]], p1[[3]], ncol = 1)
-dev.off()
-
-grid.arrange(p1[[1]], p1[[2]], p1[[3]], ncol = 1)
+invisible(dev.off())
 ```
 
 Median number of points to add for each MELD 3.0 score. Error bars indicate the IQR, and those with MELD 3.0 above 30 are grouped together. 
@@ -752,7 +729,7 @@ p2 = test_df %>%
 ragg::agg_tiff("img/pts_to_add.tiff", 
                width = 7, height = 8, units = "in", res = 300)
 grid.arrange(p2, p1, nrow = 2, ncol = 1, widths = 7, heights = c(3, 7))
-dev.off()
+invisible(dev.off())
 
 grid.arrange(p2, p1, nrow = 2, ncol = 1, widths = 7, heights = c(3, 7))
 ```
@@ -773,7 +750,7 @@ test_df %>%
   scale_fill_discrete(name = NULL, labels = paste("Quartile", quartile_label)) + 
   xlab("Multi-HCC") + ylab("Count") + 
   theme(legend.position = "bottom")
-dev.off()
+invisible(dev.off())
 
 test_df %>% 
   filter(HCC == TRUE) %>% 
@@ -832,7 +809,7 @@ data.frame(
   scale_x_log10() + scale_y_log10() + 
   xlim(0, 1) + ylim(0, 1) + 
   xlab("MELD 3.0 (non-HCC patients)") + ylab("Multi-HCC (HCC patients)")
-dev.off()
+invisible(dev.off())
 
 data.frame(
   test_df, 
@@ -900,7 +877,7 @@ paste(c(round(my_intercept_6months, 3), sapply(names(my_coefs_6months), function
 
 ## Descriptive and miscellaneous stats
 
-"Table 1" of HCC cohort characteristics, by training and validation set. 
+"Table 1" of HCC cohort characteristics, by training and test set. 
 
 ```{r}
 table1 = CreateTableOne(
@@ -909,7 +886,7 @@ table1 = CreateTableOne(
     "Serum sodium", "AFP, ng/mL", "Categorical AFP", "Tumor type", 
     "History of LRT"), 
   data = rbind(train_df %>% mutate(set = "Development"), 
-               test_df  %>% mutate(set = "Validation")) %>% 
+               test_df  %>% mutate(set = "Test")) %>% 
     filter(HCC == TRUE) %>% 
     mutate("Age, years" = INIT_AGE, 
            Sex = fct_recode(GENDER, male = "M", female = "F"), 
@@ -939,11 +916,11 @@ table1 = CreateTableOne(
   smd = FALSE, 
   addOverall = TRUE)
 
-print(table1, 
-      # Median [IQR] instead of mean (SD)
-      nonnormal = c("Age, years", "MELD", "MELD-Na", "MELD 3.0", 
-                    "Serum bilirubin", "Serum INR", "Serum creatinine", 
-                    "Serum albumin", "Serum sodium", "AFP, ng/mL"))
+kableone(table1, 
+         # Median [IQR] instead of mean (SD)
+         nonnormal = c("Age, years", "MELD", "MELD-Na", "MELD 3.0", 
+                       "Serum bilirubin", "Serum INR", "Serum creatinine", 
+                       "Serum albumin", "Serum sodium", "AFP, ng/mL"))
 ```
 
 Overall outcomes among HCC patients. 
@@ -965,10 +942,12 @@ df %>%
   count(removal_reason) %>% 
   mutate(val = paste0(n, " (", round(100*prop.table(n), 1), "%)")) %>% 
   drop_na() %>% 
-  dplyr::select("Removal reason" = removal_reason, "n (%)" = val)
+  dplyr::select("Removal reason" = removal_reason, "n (%)" = val) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
-Overall waiting list dropout at 90 days, 6 months, and 1 year among validation set patients with HCC, estimated using Kaplan-Meier. 
+Overall waiting list dropout at 90 days, 6 months, and 1 year among test set patients with HCC, estimated using Kaplan-Meier. 
 
 ```{r}
 as.data.frame(tibble(
@@ -977,10 +956,12 @@ as.data.frame(tibble(
     paste0(round(100 * (1 - summary(
       survfit(Surv(fu_days_1year, removed_status_1year) ~ 1, data = HCC_test_df), 
       times = c(90, 180, 365))$surv), 1), "%")
-))
+)) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
-Observed risk of waiting list dropout at 6 months for each Multi-HCC quartile in the validation set, estimated using Kaplan-Meier. 
+Observed risk of waiting list dropout at 6 months for each Multi-HCC quartile in the test set, estimated using Kaplan-Meier. 
 
 ```{r}
 HCC_test_df = HCC_test_df %>% 
@@ -993,12 +974,14 @@ as.data.frame(tibble(
     survfit(Surv(fu_days_6months, removed_status_6months) ~ quant, 
             data = HCC_test_df), 
     times = 180)$surv), 1), "%")
-)) %>% `rownames<-`(NULL)
+)) %>% `rownames<-`(NULL) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
 Kaplan-Meier plot of 5-year post-transplant survival among patients in each Multi-HCC risk quartile. 
 
-```{r}
+```{r, fig.width = 4.5}
 quartile_label = c("1 (Low)", "2", "3", "4 (High)")
 HCC_test_5year_df <- HCC_test_df %>% filter(!is.na(PX_STAT_DATE)) %>%
   mutate(Quartile = factor(quant, labels = ), 
@@ -1013,15 +996,17 @@ survdiff_5year = survdiff(Surv(time_tx_px, fail5year) ~ Quartile,
 ragg::agg_tiff("img/km_5year.tiff", 
                width = 7, height = 5, units = "in", res = 300)
 ggsurvplot(surv_5year, data = HCC_test_5year_df, 
+           xlab = "Days", ylab = "Proportion not removed from waitlist", 
            legend.title = "", legend.labs = paste("Quartile", quartile_label),
            risk.table = FALSE, censor = FALSE, 
            pval = round(survdiff_5year$pvalue, 2), 
            pval.coord = c(90, 0.6), conf.int = FALSE, 
            xlim = c(0, 1800), ylim = c(0.5, 1.0), 
            break.time.by = 365, risk.table.y.text.col = FALSE)
-dev.off()
+invisible(dev.off())
 
 ggsurvplot(surv_5year, data = HCC_test_5year_df, 
+           xlab = "Days", ylab = "Proportion not removed from waitlist", 
            legend.title = "", legend.labs = paste("Quartile", quartile_label),
            risk.table = FALSE, censor = FALSE, 
            pval = round(survdiff_5year$pvalue, 2), 
@@ -1037,10 +1022,12 @@ as.data.frame(tibble(
   Quartile = c("1 (Low)", "2", "3", "4 (High)"), 
   "5-year post-transplant survival" = 
     paste0(round(100 * summary(surv_5year, times = 5*365)$surv, 1), "%")
-)) %>% `rownames<-`(NULL)
+)) %>% `rownames<-`(NULL) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
-5-year post-transplant survival among validation patients with Multi-HCC 16-19, 20-23, and above 24, estimated using Kaplan-Meier. 
+5-year post-transplant survival among test patients with Multi-HCC 16-19, 20-23, and above 24, estimated using Kaplan-Meier. 
 
 ```{r}
 as.data.frame(tibble(
@@ -1058,12 +1045,14 @@ as.data.frame(tibble(
     function(x) {
       paste0(round(100 * summary(x, times = 5*365)$surv, 1), "%")
     })
-))
+)) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
 ## Concordance, integrated Brier scores, and calibration
 
-We use a bootstrap routine to obtain 95% confidence intervals for each 6-month model's test concordance and integrated Brier score (multi-HCC only).  
+We use a bootstrap routine to obtain 95% confidence intervals for each 6-month model's test concordance (Harrell's and Uno's) and integrated Brier score (multi-HCC only).  
 
 ```{r}
 # All other scores, applied to test set
@@ -1095,11 +1084,11 @@ B = 1000
 # For some reason, you need to run this line-by-line using Command + Enter
 # Running chunk by clicking the little green arrow or copy-pasting to the 
 # terminal seems to cause it to hang
-# When parallelized to 8 cores, takes ~6 minutes
+# When parallelized to 8 cores, takes ~2 minutes
 boot_diagnostics = foreach::foreach(
   b = 1:B, .packages = c("tidyverse", "survival", "randomForestSRC", "gbm", 
                          "survivalmodels", "pec")
-  ) %do% {
+  ) %dopar% {
   # Set seed
   set.seed(b)
   # Create bootstrap sample of test set
@@ -1109,6 +1098,7 @@ boot_diagnostics = foreach::foreach(
   boot_scores_test = scores_test[boot_idx,]
   
   # Concordance for each outcome
+  # Harrell's C
   concordance_est = apply(boot_scores_test, 2, function(pred) {
     if(all(is.na(pred))) {
       return(NA)
@@ -1120,13 +1110,31 @@ boot_diagnostics = foreach::foreach(
                                            removed_status_6months)), 
                 reverse = TRUE)$concordance
     })
+  # Uno's C
+  concordance_uno_est = apply(boot_scores_test, 2, function(pred) {
+    if(all(is.na(pred))) {
+      return(NA)
+    }
+    concordance(Surv(fu_days_6months, removed_status_6months) ~ pred, 
+                data.frame(pred = pred,
+                           boot_HCC_test_df %>% 
+                             dplyr::select(fu_days_6months, 
+                                           removed_status_6months)), 
+                reverse = TRUE, timewt = "n/G2")$concordance
+    })
   
   # Sensitivity concordance restricting to patients who were waitlisted after 
   # May 14, 2019. 
+  # Harrell's C
   concordance_est_20190514 = 
     concordance(Surv(fu_days_6months, removed_status_6months) ~ multi_HCC, 
                 HCC_test_20190514_test_df, 
                 reverse = TRUE)$concordance
+  # Uno's C
+  concordance_uno_est_20190514 = 
+    concordance(Surv(fu_days_6months, removed_status_6months) ~ multi_HCC, 
+                HCC_test_20190514_test_df, 
+                reverse = TRUE, timewt = "n/G2")$concordance
   
   # Integrated Brier score for 6 months only
   brier_est = crps(pec(object = refit_multi_HCC, 
@@ -1134,16 +1142,19 @@ boot_diagnostics = foreach::foreach(
                        data = boot_HCC_test_df))[-1,]
   
   return(list(concordance_est = concordance_est, 
+              concordance_uno_est = concordance_uno_est, 
               concordance_est_20190514 = concordance_est_20190514, 
+              concordance_uno_est_20190514 = concordance_uno_est_20190514, 
               brier_est = brier_est))
 }
 
 save(boot_diagnostics, file = "boot_diagnostics.rData")
 ```
 
-We report the test concordance for each model with a 95% bootstrap CI and p-values for a significant difference from Multi-HCC. All p-values reported have been adjusted using the Holm correction. 
+We report the test concordance for each model with a 95% bootstrap CI and p-values for a significant difference from Multi-HCC. All p-values reported have been adjusted using the Holm correction. Both Harrell's C-statistic and Uno's C-statistic are shown. 
 
 ```{r}
+# Harrell's C
 # Point estimates for concordance
 concordance_est = apply(scores_test, 2, function(pred) {
   concordance(Surv(fu_days_6months, removed_status_6months) ~ pred, 
@@ -1153,7 +1164,6 @@ concordance_est = apply(scores_test, 2, function(pred) {
                                          removed_status_6months)), 
               reverse = TRUE)$concordance
   })
-
 # Concordance 2.5%
 concordance_lo = 
   apply(sapply(boot_diagnostics, function(x){x$concordance_est}), 
@@ -1163,16 +1173,43 @@ concordance_hi =
   apply(sapply(boot_diagnostics, function(x){x$concordance_est}), 
         1, quantile, 0.975, na.rm = TRUE)
 
+
+# Uno's C
+# Point estimates for concordance
+concordance_uno_est = apply(scores_test, 2, function(pred) {
+  concordance(Surv(fu_days_6months, removed_status_6months) ~ pred, 
+              data.frame(pred = pred,
+                         HCC_test_df %>% 
+                           dplyr::select(fu_days_6months, 
+                                         removed_status_6months)), 
+              reverse = TRUE, timewt = "n/G2")$concordance
+  })
+# Concordance 2.5%
+concordance_uno_lo = 
+  apply(sapply(boot_diagnostics, function(x){x$concordance_uno_est}), 
+        1, quantile, 0.025, na.rm = TRUE)
+# Concordance 97.5%
+concordance_uno_hi = 
+  apply(sapply(boot_diagnostics, function(x){x$concordance_uno_est}), 
+        1, quantile, 0.975, na.rm = TRUE)
+
+
 # Table of concordance statistics with 95% CI
 concordance_tab = data.frame(
-  paste0(round(concordance_est, 3), " (", 
-         round(concordance_lo, 3), ", " ,
-         round(concordance_hi, 3), ")")
-) %>% setNames("C-statistic") %>% 
+  harrell = paste0(round(concordance_est, 3), " (", 
+                   round(concordance_lo, 3), ", " ,
+                   round(concordance_hi, 3), ")"), 
+  uno = paste0(round(concordance_uno_est, 3), " (", 
+               round(concordance_uno_lo, 3), ", " ,
+               round(concordance_uno_hi, 3), ")")
+) %>% setNames(c("Harrell's C-statistic (95% CI)", 
+                 "Uno's C-statistic (95% CI)")) %>% 
   `rownames<-`(names(concordance_est))
+```
 
-# Compare 6-month model to MELD 3.0, best-performing ML model (GBM), 
-# and to all previous scores
+```{r, eval = FALSE}
+# Compare Multi-HCC to other models
+# Harrell's C
 pvals_6months = sapply(scores_test[,-3], function(pred) {
   compareC(HCC_test_df$fu_days_6months, 
            HCC_test_df$removed_status_6months, 
@@ -1180,23 +1217,72 @@ pvals_6months = sapply(scores_test[,-3], function(pred) {
            pred)$pval
 })
 
-# Adjust all p-values (Holm's adjustment)
-pvals_adj = p.adjust(pvals_6months)
-data.frame(concordance_tab[c("MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)", 
-                             names(pvals_6months)), , drop = FALSE], 
-           c("", round(pvals_adj[names(pvals_6months)], 4))) %>% 
-  setNames(c("C-statistic (95% CI)", "Adjusted p-value"))
+# Uno's C
+# 2.5 hours to run
+pvals_uno_6months = foreach::foreach(
+  i = 1:(ncol(scores_test)-1), .packages = c("tidyverse", "survC1"), 
+  .combine = c
+  ) %dopar% {
+    # Calculate difference in Uno's C-statistic and the standard error, 
+    # using a perturbation-resampling method
+    my_Delta = Inf.Cval.Delta(
+      mydata = data.frame(time = HCC_test_df$fu_days_6months, 
+                          event = HCC_test_df$removed_status_6months), 
+      covs0 = HCC_test_df$multi_HCC, 
+      covs1 = scores_test[,-3][,i], 
+      tau = 180, 
+      itr = 1000, 
+      seed = 1)
+    
+    # Get p-value using normal approximation
+    return(pnorm(my_Delta["Delta", "Est"], 
+                 mean = 0, sd = my_Delta["Delta", "SE"]))
+  }
+names(pvals_uno_6months) = names(scores_test[,-3])
+
+save(pvals_6months, pvals_uno_6months, file = "pvals_6months.rData")
 ```
 
-As a sensitivity check, we calculate the Multi-HCC C-statistic when restricting to patients who were waitlisted after May 14, 2019. 
+```{r, echo = FALSE}
+load("pvals_6months.rData")
+```
+
+```{r}
+# Adjust all p-values (Holm's adjustment)
+pvals_adj = p.adjust(pvals_6months)
+pvals_uno_adj = p.adjust(pvals_uno_6months)
+
+# Add p=values to table of C-statistics
+data.frame(
+  harrell = concordance_tab[c("MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)", 
+                    names(pvals_6months)), 
+                    "Harrell's C-statistic (95% CI)", drop = FALSE], 
+  harrell_p = c("", ifelse(pvals_adj[names(pvals_6months)] < 0.001, 
+                           "<0.001", 
+                           round(pvals_adj[names(pvals_6months)], 4))), 
+  uno = concordance_tab[c("MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)", 
+                          names(pvals_uno_6months)), 
+                        "Uno's C-statistic (95% CI)", drop = FALSE], 
+  uno_p = c("", ifelse(pvals_uno_adj[names(pvals_uno_6months)] < 0.001, 
+                       "<0.001", 
+                       round(pvals_uno_adj[names(pvals_uno_6months)], 4)))) %>% 
+  setNames(c("Harrell's C-statistic (95% CI)", 
+             "Adjusted p-value", 
+             "Uno's C-statistic (95% CI)", 
+             "Adjusted p-value")) %>% 
+  kbl() %>%
+  kable_styling()
+```
+
+As a sensitivity check, we calculate the Multi-HCC C-statistics when restricting to patients who were waitlisted after May 14, 2019. 
 
 ```{r}
 # Point estimates for concordance
+# Harrell's C
 concordance_est_20190514 = 
   concordance(Surv(fu_days_6months, removed_status_6months) ~ multi_HCC, 
               HCC_test_20190514_df, 
               reverse = TRUE)$concordance
-
 # Concordance 2.5%
 concordance_lo_20190514 = quantile(
   sapply(boot_diagnostics, function(x){x$concordance_est_20190514}), 
@@ -1206,10 +1292,32 @@ concordance_hi_20190514 = quantile(
   sapply(boot_diagnostics, function(x){x$concordance_est_20190514}), 
   0.975, na.rm = TRUE)
 
-# Table of concordance statistics with 95% CI
-paste0(round(concordance_est_20190514, 3), " (", 
-       round(concordance_lo_20190514, 3), ", " ,
-       round(concordance_hi_20190514, 3), ")") 
+# Uno's C
+concordance_uno_est_20190514 = 
+  concordance(Surv(fu_days_6months, removed_status_6months) ~ multi_HCC, 
+              HCC_test_20190514_df, 
+              reverse = TRUE, timewt = "n/G2")$concordance
+# Concordance 2.5%
+concordance_uno_lo_20190514 = quantile(
+  sapply(boot_diagnostics, function(x){x$concordance_uno_est_20190514}), 
+  0.025, na.rm = TRUE)
+# Concordance 97.5%
+concordance_uno_hi_20190514 = quantile(
+  sapply(boot_diagnostics, function(x){x$concordance_uno_est_20190514}), 
+  0.975, na.rm = TRUE)
+
+# Concordance statistic with 95% CI
+data.frame(
+  harrell = paste0(round(concordance_est_20190514, 3), " (", 
+                   round(concordance_lo_20190514, 3), ", " ,
+                   round(concordance_hi_20190514, 3), ")"), 
+  uno = paste0(round(concordance_uno_est_20190514, 3), " (", 
+               round(concordance_uno_lo_20190514, 3), ", " ,
+               round(concordance_uno_hi_20190514, 3), ")")
+) %>% setNames(c("Harrell's C-statistic (95% CI)", 
+                 "Uno's C-statistic (95% CI)")) %>% 
+  kbl() %>%
+  kable_styling()
 ```
 
 We report the test integrated Brier score for Multi-HCC with a 95% bootstrap CI. 
@@ -1261,11 +1369,13 @@ calib_6months_df = data.frame(
   })))
 
 # Kaplan-Meier plot
-p_km_6months = ggsurvplot(survfit(Surv(fu_days_6months, removed_status_6months) ~ 
-                                    quart_6months, data = HCC_test_df), 
-                          legend.title = "", 
-                          legend.labs = paste("Quartile", quartile_label),
-                          censor = FALSE, conf.int = TRUE) 
+p_km_6months = ggsurvplot(
+  survfit(Surv(fu_days_6months, removed_status_6months) ~ 
+            quart_6months, data = HCC_test_df), 
+  xlab = "Days", ylab = "Proportion not removed from waitlist", 
+  legend.title = "", 
+  legend.labs = paste("Quartile", quartile_label),
+  censor = FALSE, conf.int = TRUE) 
 
 # KM plot with predicted survival probabilities for each quartile
 ragg::agg_tiff("img/calib_km.tiff", 
@@ -1280,7 +1390,7 @@ p_km_6months$plot +
   guides(color = "none", 
          fill = guide_legend(override.aes = list(alpha = 1), ncol = 2)) + 
   theme(legend.position = "bottom")
-dev.off()
+invisible(dev.off())
 
 p_km_6months$plot +
   geom_point(
