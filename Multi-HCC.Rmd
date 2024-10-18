@@ -16,6 +16,7 @@ library(compareC)
 library(survC1)
 library(tableone)
 library(kableExtra)
+library(ggmosaic)
 
 library(survival)
 library(randomForestSRC)
@@ -339,10 +340,11 @@ df = cohort %>%
     # 8 is death, 13 is dropout and 4/15/21 are transplanted
     removed_status = ifelse(REM_CD %in% c(8, 13), 1, 0), # Dead or dropped out
     transplanted_status = ifelse(REM_CD %in% c(4, 15, 21), 1, 0), 
-    # INIT_DATE (part of exception data) = start date of listing
+    # INIT_DATE (part of exception data) = start date of listing for non-HCC
+    # BEGIN_DATE = start date of listing for HCC
     # END_DATE = earliest of dates of removal from waiting list, transplant, 
     # death, or time copy of data created
-    fu_days = as.numeric(END_DATE - INIT_DATE), 
+    fu_days = as.numeric(END_DATE - BEGIN_INIT_DATE), 
     # 90 days
     censored_90days = fu_days > 90, 
     removed_status_90days = ifelse(censored_90days == TRUE, 0, removed_status), 
@@ -556,10 +558,10 @@ Coefficient estimates for Multi-HCC Cox PH model.
 my_model = "MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)"
 
 # Coefficient summary
-cbind(summary(fit_coxph_6months[[my_model]])$coefficients, 
+cbind("exp(coef)" = exp(coef(fit_coxph_6months[[my_model]])), 
       as.data.frame(exp(confint(fit_coxph_6months[[my_model]]))) %>%
         rename_with(~paste("exp(coef)", .x))) %>% 
-  mutate_if(is.numeric, ~round(., 4)) %>% 
+  mutate_if(is.numeric, ~round(., 2)) %>% 
   kbl() %>%
   kable_styling()
 ```
@@ -578,11 +580,11 @@ fit_coxph_univariate_6months = lapply(my_covars, function(my_covar) {
 do.call(
   rbind, 
   lapply(fit_coxph_univariate_6months, function(x) {
-    cbind(summary(x)$coefficients, 
+    cbind("exp(coef)" = exp(coef(x)), 
           as.data.frame(exp(confint(x))) %>% rename_with(~paste("exp(coef)", .x)))
   })
 ) %>% 
-  mutate_if(is.numeric, ~round(., 4)) %>% 
+  mutate_if(is.numeric, ~round(., 2)) %>% 
   kbl() %>%
   kable_styling()
 ```
@@ -644,6 +646,36 @@ refit_multi_HCC = coxph(
   data = HCC_train_df, x = TRUE)
 ```
 
+### Formula for HCC patients, aligned with MELD
+
+This is the risk prediction formula for HCC patients, re-scaled to be aligned with MELD: 
+
+```{r}
+# Cox PH coefficient to rescale 6-month linear predictor
+coxph_HCC_slope = coef(fit_coxph_HCC_nonHCC_6months)["HCC:preds6months"]
+coxph_HCC = coef(fit_coxph_HCC_nonHCC_6months)["HCC"]
+coxph_nonHCC = coef(fit_coxph_HCC_nonHCC_6months)["nonHCC_MELD"]
+# coxph function centers variables, so this is the linear shift to subtract 
+# off of the linear predictor
+coxph_shift = sum(coef(fit_coxph_6months[[my_model]]) * 
+                    fit_coxph_6months[[my_model]]$means)
+
+# Intercept for HCC patients
+my_intercept_6months = (coxph_HCC / coxph_nonHCC) -
+  (coxph_HCC_slope / coxph_nonHCC) * coxph_shift
+# Coefficients for HCC patients
+my_coefs_6months = (coxph_HCC_slope / coxph_nonHCC) * 
+  coef(fit_coxph_6months[[my_model]])
+names(my_coefs_6months) = c("MELD3", "log(AFP)", "[T2 3-5]", "[multifocal]", "[T3]")
+
+# Final formula
+paste(c(round(my_intercept_6months, 3), sapply(names(my_coefs_6months), function(x) {
+  paste0(round(my_coefs_6months[x], 3), "*", x)
+})), collapse = " + ")
+```
+
+### Visual checks
+
 Visual checks for the proportional hazards assumption. 
 
 ```{r, fig.width = 5}
@@ -653,7 +685,7 @@ ragg::agg_tiff("img/ph_km.tiff",
 ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort, 
                    data = train_df %>% 
                      mutate(Cohort = ifelse(HCC == TRUE, "HCC", "Non-HCC"))), 
-           xlab = "Days", ylab = "Proportion not removed from waitlist", 
+           xlab = "Days", ylab = "Dropout-free survival", 
            legend.title = "", legend.labs = c("HCC", "Non-HCC"), 
            xlim = c(0, 90))
 invisible(dev.off())
@@ -661,7 +693,7 @@ invisible(dev.off())
 ggsurvplot(survfit(Surv(fu_days_90days, removed_status_90days) ~ Cohort, 
                    data = train_df %>% 
                      mutate(Cohort = ifelse(HCC == TRUE, "HCC", "Non-HCC"))), 
-           xlab = "Days", ylab = "Proportion not removed from waitlist", 
+           xlab = "Days", ylab = "Dropout-free survival", 
            legend.title = "", legend.labs = c("HCC", "Non-HCC"), 
            xlim = c(0, 90))
 ```
@@ -678,19 +710,18 @@ grid.arrange(p1[[1]], p1[[2]], p1[[3]], ncol = 1)
 invisible(dev.off())
 ```
 
-Median number of points to add for each MELD 3.0 score. Error bars indicate the IQR, and those with MELD 3.0 above 30 are grouped together. 
+Mean number of MELD-equivalent points to add for each MELD 3.0 score. Error bars indicate the +/-1 standard error, and those with MELD 3.0 above 30 are grouped together. 
 
 ```{r, fig.height = 8}
 # Scatterplot of points to add against MELD
-multi_HCC_med_df = test_df %>% 
+multi_HCC_mean_df = test_df %>% 
   mutate(MELD3 = case_when(
     MELD3 >= 30 ~ 30, 
     TRUE ~ MELD3
   )) %>% 
   group_by(MELD3, Cohort) %>% 
-  summarize(median = median(diff_6months, na.rm = T), 
-            q1 = quantile(diff_6months, probs = 0.25, na.rm = T), 
-            q3 = quantile(diff_6months, probs = 0.75, na.rm = T)) %>% 
+  summarize(mu = mean(diff_6months, na.rm = T), 
+            sd = sd(diff_6months, na.rm = T)) %>% 
   ungroup()
 
 p1 = test_df %>% 
@@ -699,22 +730,21 @@ p1 = test_df %>%
     TRUE ~ MELD3
   )) %>% 
   group_by(MELD3, Cohort) %>% 
-  summarize(median = median(diff_6months, na.rm = T), 
-            q1 = quantile(diff_6months, probs = 0.25, na.rm = T), 
-            q3 = quantile(diff_6months, probs = 0.75, na.rm = T)) %>% 
+  summarize(mu = mean(diff_6months, na.rm = T), 
+            sd = sd(diff_6months, na.rm = T)) %>% 
   ungroup() %>% 
-  ggplot(aes(x = MELD3, y = median, color = Cohort)) + 
+  ggplot(aes(x = MELD3, y = mu, color = Cohort)) + 
   geom_point(position = position_dodge(0.1)) + 
   # Re-plot HCC points to bring them to front
-  geom_point(data = multi_HCC_med_df[multi_HCC_med_df$Cohort == "HCC", ], 
+  geom_point(data = multi_HCC_mean_df[multi_HCC_mean_df$Cohort == "HCC", ], 
              aes(colour = Cohort)) + 
-  geom_errorbar(aes(ymin=q1, ymax=q3), width = 0,
+  geom_errorbar(aes(ymin = mu - sd, ymax = mu + sd), width = 0,
                  position = position_dodge(0.1)) + 
-  scale_x_continuous(breaks = seq(6, 30, by = 1), limits = c(5.9, 30.1)) +
-  ylim(-7, 7) + 
-  geom_vline(xintercept = 17.5, color = "grey") +
+  scale_x_continuous(breaks = 6:30, limits = c(5.9, 30.1), 
+                     labels = c(6:29, "30+")) + 
+  scale_y_continuous(breaks = scales::breaks_pretty(), limits = c(-4, 7)) + 
   # geom_vline(xintercept = c(6, 10, 20, 30), color = "grey") +
-  xlab("MELD 3.0") + ylab("Median number of points to add")
+  xlab("MELD 3.0") + ylab("Mean number of MELD-equivalent points to add")
 
 # Marginal histogram
 p2 = test_df %>% 
@@ -769,9 +799,9 @@ We plot the 90-day survival probability of non-HCC patients with a given MELD 3.
 # Add variable that is an interaction between HCC and and Multi-HCC
 # i.e. the Multi-HCC score for HCC and 0 for non-HCC
 train_df = train_df %>% 
-  mutate(HCC_preds6months = HCC* preds6months)
+  mutate(HCC_preds6months = HCC * preds6months)
 test_df = test_df %>% 
-  mutate(HCC_preds6months = HCC* preds6months)
+  mutate(HCC_preds6months = HCC * preds6months)
 
 # Refit model to both HCC and non-HCC patients, using the hard-coded interactions
 fit_coxph_HCC_nonHCC_6months2 = coxph(
@@ -840,39 +870,111 @@ data.frame(
   xlab("MELD 3.0 (non-HCC patients)") + ylab("Multi-HCC (HCC patients)")
 ```
 
-### Formula for HCC patients, aligned with MELD
-
-This is the risk prediction formula for HCC patients, re-scaled to be aligned with MELD: 
+Mosaic plot showing the distribution of Multi-HCC quartiles for HCC patients with each MELD 3.0 scores (widths of bars correspond to number of patients with that MELD 3.0 score). MELD 3.0 scores above 30 are collapsed. 
 
 ```{r}
-# Coefficients from fitting MELD 3.0 against linear predictor 
-lp_intercept_6months = coef(fit_MELD3_lp_6months)["(Intercept)"]
-lp_slope_6months = coef(fit_MELD3_lp_6months)[("linpred_6months")]
+mosaic_df = test_df %>% 
+  filter(HCC == TRUE) %>% 
+  mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC)), 
+         MELD3 = case_when(
+           MELD3 >= 30 ~ 30, 
+           TRUE ~ MELD3)) %>% 
+  drop_na(quant) %>% 
+  group_by(MELD3, quant) %>% 
+  summarize(n = n()) %>%
+  mutate(N = sum(n, na.rm = TRUE)) %>% 
+  complete(quant, fill = list(n = 0)) %>%
+  ungroup()
 
-# coxph function centers variables, so this is the linear shift to subtract 
-# off of the linear predictor
-my_shift_6months = sum(coef(fit_coxph_HCC_nonHCC_6months) * 
-                         fit_coxph_HCC_nonHCC_6months$means)
+ragg::agg_tiff("img/meld3_quartiles.tiff", 
+               width = 7, height = 5, units = "in", res = 300)
+mosaic_df %>% 
+  ggplot() +
+  geom_mosaic(aes(x = product(MELD3), weight = n, fill = quant), 
+              offset = 0, color = "black") + 
+  scale_fill_discrete(name = "Multi-HCC quartiles", 
+                      labels = paste("Quartile", quartile_label)) + 
+  scale_x_productlist(
+    breaks = (cumsum(unique(na.omit(mosaic_df$N))) - 
+                unique(na.omit(mosaic_df$N))/2) / 
+      sum(unique(na.omit(mosaic_df$N))), 
+    labels = c(6:18, "", 20, "", 22, rep("", 7), "30+"), 
+    expand = c(0, 0)) + 
+  scale_y_continuous(labels = scales::percent, expand = c(0, 0)) + 
+  xlab("MELD 3.0") + ylab("Percent") + 
+  theme(legend.position = "bottom")
+invisible(dev.off())
 
-# Cox PH coefficient to rescale 6-month linear predictor
-coxph_slope = coef(fit_coxph_HCC_nonHCC_6months)["HCC:preds6months"]
-# Shift for the second Cox PH model (fit to the linear predictor)
-coxph_shift = sum(coef(fit_coxph_6months[[my_model]]) * 
-                    fit_coxph_6months[[my_model]]$means)
+mosaic_df %>% 
+  ggplot() +
+  geom_mosaic(aes(x = product(MELD3), weight = n, fill = quant), 
+              offset = 0, color = "black") + 
+  scale_fill_discrete(name = "Multi-HCC quartiles", 
+                      labels = paste("Quartile", quartile_label)) + 
+  scale_x_productlist(
+    breaks = (cumsum(unique(na.omit(mosaic_df$N))) - 
+                unique(na.omit(mosaic_df$N))/2) / 
+      sum(unique(na.omit(mosaic_df$N))), 
+    labels = c(6:18, "", 20, "", 22, rep("", 7), "30+"), 
+    expand = c(0, 0)) + 
+  scale_y_continuous(labels = scales::percent, expand = c(0, 0)) + 
+  xlab("MELD 3.0") + ylab("Percent") + 
+  theme(legend.position = "bottom")
+```
 
-# Intercept for HCC patients
-my_intercept_6months = lp_intercept_6months + lp_slope_6months * 
-  (coef(fit_coxph_HCC_nonHCC_6months)["HCC"] - my_shift_6months - 
-     coxph_slope * coxph_shift)
-# Coefficients for HCC patients
-my_coefs_6months = lp_slope_6months * coxph_slope *
-  coef(fit_coxph_6months[[my_model]])
-names(my_coefs_6months) = c("MELD3", "log(AFP)", "[T2 3-5]", "[multifocal]", "[T3]")
+Scatterplot of Multi-HCC against MELD 3.0. The point sizes correspond with the number of HCC patients with the given scores. Scores above 30 are collapsed. 
 
-# Final formula
-paste(c(round(my_intercept_6months, 3), sapply(names(my_coefs_6months), function(x) {
-  paste0(round(my_coefs_6months[x], 3), "*", x)
-})), collapse = " + ")
+```{r, fig.width = 4.5}
+ragg::agg_tiff("img/multihcc_vs_meld3.tiff", 
+               width = 4.5, height = 5, units = "in", res = 300)
+test_df %>% 
+  filter(HCC == TRUE) %>% 
+  mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC)), 
+         MELD3 = case_when(
+           MELD3 >= 30 ~ 30, 
+           TRUE ~ MELD3), 
+         multi_HCC = case_when(
+           multi_HCC >= 30 ~ 30, 
+           TRUE ~ multi_HCC)) %>% 
+  drop_na(quant) %>%
+  group_by(MELD3, multi_HCC) %>% 
+  summarize(n = n()) %>%
+  ungroup() %>% 
+  ggplot(aes(x = MELD3, y = multi_HCC, size = n)) + 
+  geom_point(alpha = 0.4) + 
+  geom_abline(slope = 1, intercept = 0) +
+  scale_x_continuous(breaks = seq(5, 30, by = 5), 
+                     labels = c(seq(5, 25, by = 5), "30+")) + 
+  scale_y_continuous(breaks = seq(5, 30, by = 5), 
+                     labels = c(seq(5, 25, by = 5), "30+")) + 
+  guides(size = guide_legend(title = "Number of patients")) + 
+  xlab("MELD 3.0") + ylab("Multi-HCC") + 
+  theme(legend.position = "bottom")
+invisible(dev.off())
+
+test_df %>% 
+  filter(HCC == TRUE) %>% 
+  mutate(quant = cut(multi_HCC, breaks = quantile(multi_HCC)), 
+         MELD3 = case_when(
+           MELD3 >= 30 ~ 30, 
+           TRUE ~ MELD3), 
+         multi_HCC = case_when(
+           multi_HCC >= 30 ~ 30, 
+           TRUE ~ multi_HCC)) %>% 
+  drop_na(quant) %>%
+  group_by(MELD3, multi_HCC) %>% 
+  summarize(n = n()) %>%
+  ungroup() %>% 
+  ggplot(aes(x = MELD3, y = multi_HCC, size = n)) + 
+  geom_point(alpha = 0.4) + 
+  geom_abline(slope = 1, intercept = 0) +
+  scale_x_continuous(breaks = seq(5, 30, by = 5), 
+                     labels = c(seq(5, 25, by = 5), "30+")) + 
+  scale_y_continuous(breaks = seq(5, 30, by = 5), 
+                     labels = c(seq(5, 25, by = 5), "30+")) + 
+  guides(size = guide_legend(title = "Number of patients")) + 
+  xlab("MELD 3.0") + ylab("Multi-HCC") + 
+  theme(legend.position = "bottom")
 ```
 
 ## Descriptive and miscellaneous stats
@@ -996,7 +1098,7 @@ survdiff_5year = survdiff(Surv(time_tx_px, fail5year) ~ Quartile,
 ragg::agg_tiff("img/km_5year.tiff", 
                width = 7, height = 5, units = "in", res = 300)
 ggsurvplot(surv_5year, data = HCC_test_5year_df, 
-           xlab = "Days", ylab = "Proportion not removed from waitlist", 
+           xlab = "Days", ylab = "Post-survival transplant probability", 
            legend.title = "", legend.labs = paste("Quartile", quartile_label),
            risk.table = FALSE, censor = FALSE, 
            pval = round(survdiff_5year$pvalue, 2), 
@@ -1006,7 +1108,7 @@ ggsurvplot(surv_5year, data = HCC_test_5year_df,
 invisible(dev.off())
 
 ggsurvplot(surv_5year, data = HCC_test_5year_df, 
-           xlab = "Days", ylab = "Proportion not removed from waitlist", 
+           xlab = "Days", ylab = "Post-survival transplant probability", 
            legend.title = "", legend.labs = paste("Quartile", quartile_label),
            risk.table = FALSE, censor = FALSE, 
            pval = round(survdiff_5year$pvalue, 2), 
@@ -1068,9 +1170,8 @@ scores_test = cbind(
                   `HCC-MELD` = HCC_MELD, `MELD-Eq` = MELD_Eq))
 
 # Restrict to patients waitlisted after May 14 2019
-# INIT_DATE = Beginning date for registration (in liver data)
 HCC_test_20190514_df = HCC_test_df %>% 
-  filter(INIT_DATE > as.Date("2019-05-14"))
+  filter(BEGIN_INIT_DATE > as.Date("2019-05-14"))
 ```
 
 ```{r, echo = FALSE}
@@ -1196,12 +1297,12 @@ concordance_uno_hi =
 
 # Table of concordance statistics with 95% CI
 concordance_tab = data.frame(
-  harrell = paste0(round(concordance_est, 3), " (", 
-                   round(concordance_lo, 3), ", " ,
-                   round(concordance_hi, 3), ")"), 
-  uno = paste0(round(concordance_uno_est, 3), " (", 
-               round(concordance_uno_lo, 3), ", " ,
-               round(concordance_uno_hi, 3), ")")
+  harrell = paste0(round(concordance_est, 2), " (", 
+                   round(concordance_lo, 2), ", " ,
+                   round(concordance_hi, 2), ")"), 
+  uno = paste0(round(concordance_uno_est, 2), " (", 
+               round(concordance_uno_lo, 2), ", " ,
+               round(concordance_uno_hi, 2), ")")
 ) %>% setNames(c("Harrell's C-statistic (95% CI)", 
                  "Uno's C-statistic (95% CI)")) %>% 
   `rownames<-`(names(concordance_est))
@@ -1257,15 +1358,15 @@ data.frame(
   harrell = concordance_tab[c("MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)", 
                     names(pvals_6months)), 
                     "Harrell's C-statistic (95% CI)", drop = FALSE], 
-  harrell_p = c("", ifelse(pvals_adj[names(pvals_6months)] < 0.001, 
-                           "<0.001", 
-                           round(pvals_adj[names(pvals_6months)], 4))), 
+  harrell_p = c("", ifelse(pvals_adj[names(pvals_6months)] < 0.01, 
+                           "<0.01", 
+                           round(pvals_adj[names(pvals_6months)], 2))), 
   uno = concordance_tab[c("MELD 3.0 + log(AFP) + tumor burden (Multi-HCC)", 
                           names(pvals_uno_6months)), 
                         "Uno's C-statistic (95% CI)", drop = FALSE], 
-  uno_p = c("", ifelse(pvals_uno_adj[names(pvals_uno_6months)] < 0.001, 
-                       "<0.001", 
-                       round(pvals_uno_adj[names(pvals_uno_6months)], 4)))) %>% 
+  uno_p = c("", ifelse(pvals_uno_adj[names(pvals_uno_6months)] < 0.01, 
+                       "<0.01", 
+                       round(pvals_uno_adj[names(pvals_uno_6months)], 2)))) %>% 
   setNames(c("Harrell's C-statistic (95% CI)", 
              "Adjusted p-value", 
              "Uno's C-statistic (95% CI)", 
@@ -1308,12 +1409,12 @@ concordance_uno_hi_20190514 = quantile(
 
 # Concordance statistic with 95% CI
 data.frame(
-  harrell = paste0(round(concordance_est_20190514, 3), " (", 
-                   round(concordance_lo_20190514, 3), ", " ,
-                   round(concordance_hi_20190514, 3), ")"), 
-  uno = paste0(round(concordance_uno_est_20190514, 3), " (", 
-               round(concordance_uno_lo_20190514, 3), ", " ,
-               round(concordance_uno_hi_20190514, 3), ")")
+  harrell = paste0(round(concordance_est_20190514, 2), " (", 
+                   round(concordance_lo_20190514, 2), ", " ,
+                   round(concordance_hi_20190514, 2), ")"), 
+  uno = paste0(round(concordance_uno_est_20190514, 2), " (", 
+               round(concordance_uno_lo_20190514, 2), ", " ,
+               round(concordance_uno_hi_20190514, 2), ")")
 ) %>% setNames(c("Harrell's C-statistic (95% CI)", 
                  "Uno's C-statistic (95% CI)")) %>% 
   kbl() %>%
@@ -1372,7 +1473,7 @@ calib_6months_df = data.frame(
 p_km_6months = ggsurvplot(
   survfit(Surv(fu_days_6months, removed_status_6months) ~ 
             quart_6months, data = HCC_test_df), 
-  xlab = "Days", ylab = "Proportion not removed from waitlist", 
+  xlab = "Days", ylab = "Dropout-free survival", 
   legend.title = "", 
   legend.labs = paste("Quartile", quartile_label),
   censor = FALSE, conf.int = TRUE) 
